@@ -5,6 +5,15 @@ const { Groq } = require('groq-sdk');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const expressip = require('express-ip');
+const connectDB = require('./config/db');
+const sessionService = require('./services/sessionService');
+
+// Load environment variables from .env file if exists
+require('dotenv').config();
+
+// Connect to MongoDB
+connectDB();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -12,10 +21,48 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(expressip().getIpInfoMiddleware);
 
 // Initialize Groq client
 const groq = new Groq({
-  apiKey: "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"
+  apiKey: process.env.GROQ_API_KEY || "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"
+});
+
+// Session endpoints
+app.post('/api/session/save', async (req, res) => {
+  try {
+    const { code, language } = req.body;
+    const ipAddress = req.ipInfo.ip || req.ip;
+
+    if (!code) {
+      return res.status(400).json({ error: 'No code provided' });
+    }
+
+    const session = await sessionService.saveSession(ipAddress, code, language);
+    res.json({ message: 'Session saved successfully', session });
+  } catch (error) {
+    console.error('Session save error:', error);
+    res.status(500).json({ error: 'Failed to save session' });
+  }
+});
+
+app.get('/api/session/load', async (req, res) => {
+  try {
+    const ipAddress = req.ipInfo.ip || req.ip;
+    const session = await sessionService.getSession(ipAddress);
+    
+    if (!session) {
+      return res.status(404).json({ 
+        error: 'No saved session found',
+        defaultCode: `# Welcome to Python Sandbox\ndef hello_world():\n    print("Hello, Sandbox World!")\n\nhello_world()`
+      });
+    }
+    
+    res.json({ session });
+  } catch (error) {
+    console.error('Session load error:', error);
+    res.status(500).json({ error: 'Failed to load session' });
+  }
 });
 
 // Endpoint for AI code suggestions

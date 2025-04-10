@@ -1,12 +1,13 @@
+// code-editor-backend/routes/api.js
 const express = require('express');
 const os = require('os');
 const { VM } = require('vm2');
 const { exec } = require('child_process');
 const util = require('util');
 const groqService = require('../services/groqService');
+const sessionService = require('../services/sessionService');
 const path = require('path');
 const fs = require('fs');
-
 
 const router = express.Router();
 const execPromise = util.promisify(exec);
@@ -131,6 +132,44 @@ router.post('/terminal', async (req, res) => {
     return res.json({ output: stdout || stderr });
   } catch (error) {
     return res.json({ output: `Error: ${error.message}` });
+  }
+});
+
+// Save user session
+router.post('/session/save', async (req, res) => {
+  try {
+    const { code, language } = req.body;
+    const ipAddress = req.ipInfo.ip || req.ip;
+
+    if (!code) {
+      return res.status(400).json({ error: 'No code provided' });
+    }
+
+    const session = await sessionService.saveSession(ipAddress, code, language);
+    res.json({ message: 'Session saved successfully', session });
+  } catch (error) {
+    console.error('Session save error:', error);
+    res.status(500).json({ error: 'Failed to save session' });
+  }
+});
+
+// Load user session
+router.get('/session/load', async (req, res) => {
+  try {
+    const ipAddress = req.ipInfo.ip || req.ip;
+    const session = await sessionService.getSession(ipAddress);
+    
+    if (!session) {
+      return res.status(404).json({ 
+        error: 'No saved session found',
+        defaultCode: `# Welcome to Python Sandbox\ndef hello_world():\n    print("Hello, Sandbox World!")\n\nhello_world()`
+      });
+    }
+    
+    res.json({ session });
+  } catch (error) {
+    console.error('Session load error:', error);
+    res.status(500).json({ error: 'Failed to load session' });
   }
 });
 

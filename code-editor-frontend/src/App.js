@@ -1,15 +1,18 @@
-import React, { useState, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { Container, Row, Col, Button, Card, Modal, Toast, ToastContainer } from 'react-bootstrap';
 import { Editor } from '@monaco-editor/react';
-import { PlayFill, Magic, CodeSlash, SendFill } from 'react-bootstrap-icons';
+import { PlayFill, Magic, CodeSlash, SendFill, Save } from 'react-bootstrap-icons';
 import axios from 'axios';
 
 const PythonSandbox = () => {
-  const [code, setCode] = useState(`# Welcome to Python Sandbox
+  // Default code if no saved session exists
+  const defaultCode = `# Welcome to Python Sandbox
 def hello_world():
     print("Hello, Sandbox World!")
 
-hello_world()`);
+hello_world()`;
+
+  const [code, setCode] = useState(defaultCode);
   const [output, setOutput] = useState('');
   const [isError, setIsError] = useState(false);
   const [activePanel, setActivePanel] = useState('editor');
@@ -18,7 +21,116 @@ hello_world()`);
   const [toast, setToast] = useState({ show: false, message: '', type: 'info' });
   const [showOutputModal, setShowOutputModal] = useState(false);
   const [terminalInput, setTerminalInput] = useState('');
+  const [language, setLanguage] = useState('python');
+  const [isLoading, setIsLoading] = useState(true);
   const terminalInputRef = useRef(null);
+
+  // Load saved session on initial page load
+  useEffect(() => {
+    const loadSession = async () => {
+      try {
+        setIsLoading(true);
+        const response = await axios.get('http://localhost:5000/api/session/load');
+        
+        if (response.data && response.data.session) {
+          setCode(response.data.session.code);
+          setLanguage(response.data.session.language || 'python');
+          
+          setConsoleHistory(prev => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              content: 'Previous session loaded successfully.',
+              type: 'info'
+            }
+          ]);
+        }
+      } catch (error) {
+        console.error('Failed to load session:', error);
+        
+        // Use default code
+        setCode(defaultCode);
+        
+        // Only add to console history if it's a 404 (no saved session)
+        if (error.response && error.response.status === 404) {
+          setConsoleHistory(prev => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              content: 'No saved session found. Starting with default code.',
+              type: 'info'
+            }
+          ]);
+        } else {
+          setConsoleHistory(prev => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              content: `Error loading session: ${error.message}`,
+              type: 'error'
+            }
+          ]);
+        }
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadSession();
+  }, []);
+
+  // Save session function
+  const saveSession = useCallback(async () => {
+    try {
+      await axios.post('http://localhost:5000/api/session/save', { 
+        code, 
+        language 
+      });
+      
+      setToast({ 
+        show: true, 
+        message: 'Session saved successfully', 
+        type: 'success' 
+      });
+      
+      setConsoleHistory(prev => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString(),
+          content: 'Session saved successfully',
+          type: 'info'
+        }
+      ]);
+    } catch (error) {
+      console.error('Failed to save session:', error);
+      
+      setToast({ 
+        show: true, 
+        message: 'Failed to save session', 
+        type: 'danger' 
+      });
+      
+      setConsoleHistory(prev => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString(),
+          content: `Error saving session: ${error.message}`,
+          type: 'error'
+        }
+      ]);
+    }
+  }, [code, language]);
+
+  // Auto-save session when code changes (debounced)
+  useEffect(() => {
+    if (isLoading) return; // Skip during initial loading
+    
+    const timer = setTimeout(() => {
+      saveSession();
+    }, 3000); // Save 3 seconds after last code change
+    
+    return () => clearTimeout(timer);
+  }, [code, isLoading, saveSession]);
 
   const handleCodeRun = useCallback(async () => {
     try {
@@ -38,12 +150,15 @@ hello_world()`);
 
       setIsError(!!response.data.error);
       setShowOutputModal(true);
+      
+      // Save session after code run
+      saveSession();
     } catch (error) {
       setIsError(true);
       setOutput(`Execution error: ${error.message}`);
       setShowOutputModal(true);
     }
-  }, [code]);
+  }, [code, saveSession]);
 
   const handleGetSuggestions = useCallback(async () => {
     try {
@@ -105,6 +220,10 @@ hello_world()`);
     handleShellCommand(terminalInput);
   };
 
+  const handleManualSave = () => {
+    saveSession();
+  };
+
   const editorOptions = useMemo(() => ({
     selectOnLineNumbers: true,
     automaticLayout: true,
@@ -122,10 +241,12 @@ hello_world()`);
             height="calc(100vh - 120px)" 
             width="100%"
             defaultLanguage="python"
+            language={language}
             theme="vs-dark"
             value={code}
             onChange={(value) => setCode(value || '')}
             options={editorOptions}
+            loading={<div className="text-center p-5">Loading editor...</div>}
           />
         );
       case 'console':
@@ -143,6 +264,7 @@ hello_world()`);
                 className={`mb-1 ${
                   entry.type === 'error' ? 'text-danger' : 
                   entry.type === 'command' ? 'text-warning' : 
+                  entry.type === 'info' ? 'text-info' :
                   'text-light'
                 }`}
               >
@@ -168,6 +290,7 @@ hello_world()`);
                   className={`mb-1 ${
                     entry.type === 'error' ? 'text-danger' : 
                     entry.type === 'command' ? 'text-warning' : 
+                    entry.type === 'info' ? 'text-info' :
                     'text-light'
                   }`}
                 >
@@ -217,6 +340,9 @@ hello_world()`);
             <Button variant="info" size="sm" onClick={handleGetSuggestions}>
               <Magic className="me-1" /> Suggest
             </Button>
+            <Button variant="primary" size="sm" onClick={handleManualSave}>
+              <Save className="me-1" /> Save
+            </Button>
           </div>
         </Col>
       </Row>
@@ -260,7 +386,13 @@ hello_world()`);
                   overflow: 'hidden',
                 }}
               >
-                {renderPanel()}
+                {isLoading ? (
+                  <div className="d-flex justify-content-center align-items-center h-100 bg-dark text-light">
+                    <p>Loading your saved session...</p>
+                  </div>
+                ) : (
+                  renderPanel()
+                )}
               </div>
             </Card.Body>
           </Card>
@@ -330,10 +462,27 @@ hello_world()`);
         >
           <Toast.Header>
             <strong className="me-auto">Notification</strong>
+            <strong className="me-auto">Notification</strong>
           </Toast.Header>
-          <Toast.Body>{toast.message}</Toast.Body>
+          <Toast.Body>
+            {toast.type === 'success' ? (
+              <span className="text-light">{toast.message}</span>
+            ) : (
+              toast.message
+            )}
+          </Toast.Body>
         </Toast>
       </ToastContainer>
+
+      {/* Session status indicator */}
+      <div 
+        className="position-fixed bottom-0 start-0 p-2 text-light bg-dark bg-opacity-75"
+        style={{ fontSize: '0.8rem', borderTopRightRadius: '0.3rem' }}
+      >
+        <small>
+          Session: <span className="text-success">Auto-saving</span>
+        </small>
+      </div>
     </Container>
   );
 };
